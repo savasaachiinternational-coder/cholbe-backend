@@ -63,6 +63,16 @@ export class AuthController {
   }
 
   @Public()
+  @Post('password/verify-otp')
+  @ApiOperation({
+    summary: 'Check a password-reset OTP and get a short-lived reset token',
+    description: 'Consumes the OTP. Pass the returned resetToken to POST /auth/password/reset.',
+  })
+  verifyResetOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyResetOtp(dto);
+  }
+
+  @Public()
   @Get('users')
   @ApiOperation({ summary: 'List all users (public directory)' })
   @ApiResponse({ status: 200, type: [PublicUserDto] })

@@ -92,8 +92,15 @@ export class VendorProductsService {
     });
   }
 
+  /** A product without its own photo falls back to its catalogue medicine's image. */
+  private withImage<T extends { imageUrl: string | null; medicine: { imageUrl: string | null } | null }>(
+    product: T,
+  ): T {
+    return { ...product, imageUrl: product.imageUrl ?? product.medicine?.imageUrl ?? null };
+  }
+
   async findShop(query: VendorProductQueryDto) {
-    return this.prisma.vendorProduct.findMany({
+    const products = await this.prisma.vendorProduct.findMany({
       where: {
         isActive: true,
         stockQuantity: { gt: 0 },
@@ -111,6 +118,7 @@ export class VendorProductsService {
       },
       orderBy: { createdAt: 'desc' },
     });
+    return products.map((p) => this.withImage(p));
   }
 
   async findOne(id: string) {
@@ -119,7 +127,7 @@ export class VendorProductsService {
       include: { medicine: true, vendor: true },
     });
     if (!product) throw new NotFoundException('Product not found');
-    return product;
+    return this.withImage(product);
   }
 
   async update(userId: string, id: string, dto: UpdateVendorProductDto) {

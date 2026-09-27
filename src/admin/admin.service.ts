@@ -7,6 +7,7 @@ import {
   VendorApprovalStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
+import { OrdersService } from '../orders/orders.service';
 import { VendorProductsService } from '../vendor-products/vendor-products.service';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -19,6 +20,7 @@ export class AdminService {
     private vendorProducts: VendorProductsService,
     private usersService: UsersService,
     private notifications: NotificationsService,
+    private orders: OrdersService,
   ) {}
 
   async dashboard() {
@@ -213,29 +215,13 @@ export class AdminService {
     });
   }
 
-  async updateOrderStatus(id: string, status: OrderStatus) {
-    const result = await this.prisma.order.update({
-      where: { id },
-      data: {
-        status,
-        statusEvents: { create: { status, note: `Status updated to ${status}` } },
-      },
-    });
+  /** Same rules, stock and payment handling as a vendor change; see OrdersService.changeStatus. */
+  updateOrderStatus(id: string, status: OrderStatus, adminUserId: string, note?: string) {
+    return this.orders.changeStatus(id, status, { role: UserRole.ADMIN, userId: adminUserId }, note);
+  }
 
-    const ord = await this.prisma.order.findUnique({
-      where: { id },
-      select: { customerId: true, orderNumber: true },
-    });
-    if (ord) {
-      void this.notifications.create(
-        ord.customerId,
-        'order',
-        'Order Status Updated',
-        `Your order #${ord.orderNumber} is now ${status.toLowerCase().replace(/_/g, ' ')}.`,
-      );
-    }
-
-    return result;
+  markOrderPaid(id: string) {
+    return this.orders.markPaid(id);
   }
 
   async ordersMonthly() {

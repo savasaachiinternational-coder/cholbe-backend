@@ -8,6 +8,7 @@ import { MedicinesModule } from './medicines/medicines.module';
 import { VendorProductsModule } from './vendor-products/vendor-products.module';
 import { ReportsModule } from './reports/reports.module';
 import { PrescriptionsModule } from './prescriptions/prescriptions.module';
+import { CholbePrescriptionsModule } from './cholbe-prescriptions/cholbe-prescriptions.module';
 import { CartModule } from './cart/cart.module';
 import { OrdersModule } from './orders/orders.module';
 import { AddressesModule } from './addresses/addresses.module';
@@ -25,6 +26,8 @@ import { SpecialtiesModule } from './specialties/specialties.module';
 import { ConsultationsModule } from './consultations/consultations.module';
 import { MapsModule } from './maps/maps.module';
 import { DoctorPortalModule } from './doctor-portal/doctor-portal.module';
+import { PushModule } from './push/push.module';
+import { GeminiModule } from './gemini/gemini.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -38,6 +41,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     VendorProductsModule,
     ReportsModule,
     PrescriptionsModule,
+    CholbePrescriptionsModule,
     CartModule,
     OrdersModule,
     AddressesModule,
@@ -55,6 +59,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     ConsultationsModule,
     DoctorPortalModule,
     MapsModule,
+    PushModule,
+    GeminiModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

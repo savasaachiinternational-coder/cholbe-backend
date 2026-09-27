@@ -7,9 +7,13 @@ import { PrismaService } from '../prisma/prisma.module';
 import {
   isSlotSnoozed,
   isSlotTakenToday,
+  countMissedSlots,
+  dayBounds,
   minutesUntil,
   parseTimeToday,
+  TAKE_WINDOW_MINUTES,
 } from '../common/utils/medication-time.util';
+import { daysOfStock, lowStockThreshold } from '../common/utils/medication-stock.util';
 
 @Injectable()
 export class PatientHomeService {
@@ -25,10 +29,7 @@ export class PatientHomeService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date();
-    endOfDay.setHours(23, 59, 59, 999);
+    const { startOfDay, endOfDay } = dayBounds();
 
     const [
       schedules,
@@ -75,7 +76,7 @@ export class PatientHomeService {
     ]);
 
     const taken = todayLogs.filter((l) => l.status === 'taken').length;
-    const missed = todayLogs.filter((l) => l.status === 'missed').length;
+    const missed = countMissedSlots(todayLogs);
     const totalDosesToday = schedules.reduce((sum, s) => sum + (s.times.length || 1), 0);
     const remaining = Math.max(0, totalDosesToday - taken);
 
@@ -105,7 +106,7 @@ export class PatientHomeService {
           : null,
       },
       refill: {
-        daysUntil: 5,
+        ...this.soonestRefill(schedules),
         familyMonitoring: (user.patientProfile?.familyMembers.length ?? 0) > 0,
       },
       schedules: schedules.map((s) => ({
@@ -199,7 +200,9 @@ export class PatientHomeService {
       medicineName: best.medicineName,
       dose: best.dose,
       scheduledTime: best.scheduledTime,
-      canMarkTaken: true,
+      canMarkTaken: best.minutesUntil <= TAKE_WINDOW_MINUTES,
+      /** When the dose (or its snooze) is due; lets the app tick the label itself. */
+      dueAt: best.dueAt.toISOString(),
       minutesUntil: best.minutesUntil,
       minutesUntilLabel:
         best.minutesUntil <= 0
@@ -207,6 +210,39 @@ export class PatientHomeService {
           : best.minutesUntil < 60
             ? `In ${best.minutesUntil} Minutes`
             : `In ${Math.floor(best.minutesUntil / 60)}h ${best.minutesUntil % 60}m`,
+    };
+  }
+
+  /** The tracked medicine that runs out first; nulls when none has stock tracking on. */
+  private soonestRefill(
+    schedules: Array<{
+      medicineName: string;
+      dose: string | null;
+      times: string[];
+      refillEnabled: boolean;
+      inventoryCount: number | null;
+    }>,
+  ) {
+    let soonest: { medicineName: string; daysUntil: number; unitsLeft: number; lowStock: boolean } | null =
+      null;
+    for (const s of schedules) {
+      if (!s.refillEnabled || s.inventoryCount === null) continue;
+      const tracked = { ...s, inventoryCount: s.inventoryCount };
+      const days = daysOfStock(tracked);
+      if (!soonest || days < soonest.daysUntil) {
+        soonest = {
+          medicineName: s.medicineName,
+          daysUntil: days,
+          unitsLeft: s.inventoryCount,
+          lowStock: s.inventoryCount <= lowStockThreshold(s),
+        };
+      }
+    }
+    return {
+      daysUntil: soonest?.daysUntil ?? null,
+      medicineName: soonest?.medicineName ?? null,
+      unitsLeft: soonest?.unitsLeft ?? null,
+      lowStock: soonest?.lowStock ?? false,
     };
   }
 

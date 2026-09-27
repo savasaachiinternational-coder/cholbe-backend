@@ -20,7 +20,8 @@ import {
 import { AdminService } from './admin.service';
 import { AdminDoctorsService } from './admin-doctors.service';
 import { SpecialtiesService } from '../specialties/specialties.service';
-import { Roles } from '../common/decorators';
+import { CurrentUser, JwtPayload, Roles } from '../common/decorators';
+import { UpdateOrderStatusDto } from '../orders/dto/order.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 
@@ -56,8 +57,18 @@ export class AdminController {
 
   @Patch('orders/:id/status')
   @ApiOperation({ summary: 'Admin update order status' })
-  updateOrderStatus(@Param('id') id: string, @Body('status') status: OrderStatus) {
-    return this.adminService.updateOrderStatus(id, status);
+  updateOrderStatus(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderStatusDto,
+  ) {
+    return this.adminService.updateOrderStatus(id, dto.status, user.sub, dto.note);
+  }
+
+  @Patch('orders/:id/payment')
+  @ApiOperation({ summary: 'Admin marks an online payment as received' })
+  markOrderPaid(@Param('id') id: string) {
+    return this.adminService.markOrderPaid(id);
   }
 
   @Get('chart/orders-monthly')

@@ -1,7 +1,12 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { MedicineSource, UserRole } from '@prisma/client';
+import { MedicineSource, MedicineStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
-import { CreateMedicineDto, MedicineQueryDto, UpdateMedicineDto } from './dto/medicine.dto';
+import {
+  CreateMedicineDto,
+  MedicineQueryDto,
+  PrescribableMedicineQueryDto,
+  UpdateMedicineDto,
+} from './dto/medicine.dto';
 
 @Injectable()
 export class MedicinesService {
@@ -32,6 +37,8 @@ export class MedicinesService {
       where: {
         ...(query.source ? { source: query.source } : {}),
         ...(query.status ? { status: query.status } : {}),
+        ...(query.category ? { category: { equals: query.category, mode: 'insensitive' } } : {}),
+        ...(query.form ? { form: { equals: query.form, mode: 'insensitive' } } : {}),
         ...(query.search
           ? {
               OR: [
@@ -46,6 +53,43 @@ export class MedicinesService {
         _count: { select: { vendorProducts: true } },
       },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Catalogue for the doctor's prescription picker: active medicines that have
+   * a dosage form, with their prescribing defaults. Prices are left out on purpose.
+   */
+  async findPrescribable(query: PrescribableMedicineQueryDto) {
+    const search = query.search?.trim();
+    const where: Prisma.MedicineWhereInput = {
+      status: MedicineStatus.ACTIVE,
+      form: { not: null },
+      ...(search
+        ? {
+            OR: [
+              { name: { contains: search, mode: 'insensitive' } },
+              { genericName: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    return this.prisma.medicine.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        genericName: true,
+        form: true,
+        strength: true,
+        defaultDose: true,
+        defaultFrequency: true,
+        defaultDuration: true,
+        defaultInstruction: true,
+      },
+      orderBy: { name: 'asc' },
+      take: query.limit ?? 50,
     });
   }
 

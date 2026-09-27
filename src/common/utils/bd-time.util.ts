@@ -128,30 +128,39 @@ export function formatAppointmentDateBd(date: Date): string {
   }).format(date);
 }
 
-export function pickNextUpcomingAppointment<
-  T extends {
-    scheduledDate: Date;
-    timeSlot: string;
-    status: string;
-    durationMin?: number | null;
-  },
->(appointments: T[]): T | null {
-  return (
-    appointments
-      .filter((appt) =>
-        isAppointmentUpcoming(
-          appt.scheduledDate,
-          appt.timeSlot,
-          appt.status,
-          appt.durationMin ?? 30,
-        ),
-      )
-      .sort(
-        (a, b) =>
-          appointmentStartsAtBd(a.scheduledDate, a.timeSlot).getTime() -
-          appointmentStartsAtBd(b.scheduledDate, b.timeSlot).getTime(),
-      )[0] ?? null
-  );
+type UpcomingCandidate = {
+  scheduledDate: Date;
+  timeSlot: string;
+  status: string;
+  durationMin?: number | null;
+};
+
+/** Active appointments that haven't ended yet, soonest first (BD time). */
+export function pickUpcomingAppointments<T extends UpcomingCandidate>(
+  appointments: T[],
+  limit?: number,
+): T[] {
+  const upcoming = appointments
+    .filter((appt) =>
+      isAppointmentUpcoming(
+        appt.scheduledDate,
+        appt.timeSlot,
+        appt.status,
+        appt.durationMin ?? 30,
+      ),
+    )
+    .sort(
+      (a, b) =>
+        appointmentStartsAtBd(a.scheduledDate, a.timeSlot).getTime() -
+        appointmentStartsAtBd(b.scheduledDate, b.timeSlot).getTime(),
+    );
+  return limit === undefined ? upcoming : upcoming.slice(0, limit);
+}
+
+export function pickNextUpcomingAppointment<T extends UpcomingCandidate>(
+  appointments: T[],
+): T | null {
+  return pickUpcomingAppointments(appointments, 1)[0] ?? null;
 }
 
 /** Live-call helper: BD time slot ~2 minutes ago. */

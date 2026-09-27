@@ -4,8 +4,10 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import { OtpChannel, UserRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import {
@@ -20,13 +22,33 @@ import {
 import { generateOtpCode } from '../common/utils/helpers';
 import { UsersService } from '../users/users.service';
 
+const RESET_TOKEN_TTL_SECONDS = 10 * 60;
+
+type ResetTokenPayload = { sub: string; purpose: 'password-reset'; pwv: string };
+
 @Injectable()
 export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
     private usersService: UsersService,
+    private config: ConfigService,
   ) {}
+
+  /**
+   * Separate secret so a reset token can never pass the access-token guard.
+   */
+  private resetTokenSecret() {
+    return `${this.config.get<string>('JWT_SECRET', 'change-me')}:password-reset`;
+  }
+
+  /**
+   * Fingerprint of the current password hash. Changing the password changes it,
+   * which makes a reset token single-use without storing it.
+   */
+  private passwordVersion(passwordHash: string) {
+    return createHash('sha256').update(passwordHash).digest('hex').slice(0, 16);
+  }
 
   private async hashPassword(password: string) {
     return bcrypt.hash(password, 12);
@@ -132,15 +154,22 @@ export class AuthService {
       },
     });
 
-    await this.prisma.otpCode.create({
-      data: {
-        contact: dto.contact,
-        channel: dto.channel,
-        code,
-        expiresAt,
-        userId: user?.id,
-      },
-    });
+    // A new code replaces any earlier ones, so only one code per contact is ever valid.
+    await this.prisma.$transaction([
+      this.prisma.otpCode.updateMany({
+        where: { contact: dto.contact, used: false },
+        data: { used: true },
+      }),
+      this.prisma.otpCode.create({
+        data: {
+          contact: dto.contact,
+          channel: dto.channel,
+          code,
+          expiresAt,
+          userId: user?.id,
+        },
+      }),
+    ]);
 
     // In production: send via SMS/email provider
     return {
@@ -168,17 +197,65 @@ export class AuthService {
     return { verified: true, contact: dto.contact };
   }
 
-  async resetPassword(dto: ResetPasswordDto) {
-    await this.verifyOtp({ contact: dto.contact, code: dto.code });
+  /** Consumes a password-reset OTP and returns a short-lived token for the reset call. */
+  async verifyResetOtp(dto: VerifyOtpDto) {
+    await this.verifyOtp(dto);
 
     const user = await this.prisma.user.findFirst({
       where: { OR: [{ email: dto.contact }, { phone: dto.contact }] },
     });
-    if (!user) throw new BadRequestException('User not found');
+    if (!user) throw new BadRequestException('Invalid or expired OTP');
+
+    const payload: ResetTokenPayload = {
+      sub: user.id,
+      purpose: 'password-reset',
+      pwv: this.passwordVersion(user.passwordHash),
+    };
+    const resetToken = this.jwt.sign(payload, {
+      secret: this.resetTokenSecret(),
+      expiresIn: RESET_TOKEN_TTL_SECONDS,
+    });
+    return { resetToken, expiresInSeconds: RESET_TOKEN_TTL_SECONDS };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const user = dto.resetToken
+      ? await this.userFromResetToken(dto.resetToken)
+      : await this.userFromResetCode(dto.contact, dto.code);
 
     const passwordHash = await this.hashPassword(dto.newPassword);
     await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
     return { message: 'Password updated successfully' };
+  }
+
+  private async userFromResetToken(token: string) {
+    const expired = new BadRequestException('Reset link expired. Please request a new code.');
+    let payload: ResetTokenPayload;
+    try {
+      payload = this.jwt.verify<ResetTokenPayload>(token, { secret: this.resetTokenSecret() });
+    } catch {
+      throw expired;
+    }
+    if (payload.purpose !== 'password-reset') throw expired;
+
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    // A changed password means this token was already used (or is stale).
+    if (!user || this.passwordVersion(user.passwordHash) !== payload.pwv) throw expired;
+    return user;
+  }
+
+  /** Legacy path for app builds that send contact + code straight to reset. */
+  private async userFromResetCode(contact?: string, code?: string) {
+    if (!contact || !code) {
+      throw new BadRequestException('resetToken, or contact and code, is required');
+    }
+    await this.verifyOtp({ contact, code });
+
+    const user = await this.prisma.user.findFirst({
+      where: { OR: [{ email: contact }, { phone: contact }] },
+    });
+    if (!user) throw new BadRequestException('User not found');
+    return user;
   }
 
   async completePatientOnboarding(userId: string, dto: PatientOnboardingDto) {

@@ -2,7 +2,12 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } f
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { MedicinesService } from './medicines.service';
-import { CreateMedicineDto, MedicineQueryDto, UpdateMedicineDto } from './dto/medicine.dto';
+import {
+  CreateMedicineDto,
+  MedicineQueryDto,
+  PrescribableMedicineQueryDto,
+  UpdateMedicineDto,
+} from './dto/medicine.dto';
 import { CurrentUser, JwtPayload, Roles } from '../common/decorators';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -38,6 +43,15 @@ export class MedicinesController {
   @ApiOperation({ summary: 'List medicines (catalog browse)' })
   findAll(@Query() query: MedicineQueryDto) {
     return this.medicinesService.findAll(query);
+  }
+
+  // Declared before ':id' so "prescribe" is not taken as an id.
+  @Get('prescribe')
+  @Roles(UserRole.DOCTOR, UserRole.ADMIN)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Doctor: search the catalogue for prescription lines (no prices)' })
+  findPrescribable(@Query() query: PrescribableMedicineQueryDto) {
+    return this.medicinesService.findPrescribable(query);
   }
 
   @Public()
