@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsEnum, IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
-import { PaymentMethod } from '@prisma/client';
+import { OrderStatus, PaymentMethod } from '@prisma/client';
 
 export class CreateAddressDto {
   @ApiProperty({ example: 'Home' })
@@ -29,6 +29,17 @@ export class CreateAddressDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+}
+
+export class UpdateOrderStatusDto {
+  @ApiProperty({ enum: OrderStatus, example: OrderStatus.CONFIRMED })
+  @IsEnum(OrderStatus)
+  status!: OrderStatus;
+
+  @ApiPropertyOptional({ example: 'Customer asked to cancel by phone' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
 
 export class CreateOrderDto {

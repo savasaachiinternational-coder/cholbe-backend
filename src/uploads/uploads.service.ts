@@ -1,149 +1,105 @@
-import {
-  BadRequestException,
-  Injectable,
-  PayloadTooLargeException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { extname, join } from 'path';
 import { randomUUID } from 'crypto';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { extname, join, normalize, resolve, sep } from 'path';
 
-const IMAGE_MIMES = new Set([
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-]);
+export type UploadCategory =
+  | 'reports'
+  | 'prescriptions'
+  | 'products'
+  | 'avatars'
+  | 'chat'
+  | 'vendor-docs';
 
-const DOCUMENT_MIMES = new Set(['application/pdf']);
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+const DOCUMENT_TYPES = [...IMAGE_TYPES, 'application/pdf'];
 
-const AUDIO_MIMES = new Set([
-  'audio/mpeg',
-  'audio/mp3',
-  'audio/mp4',
-  'audio/m4a',
-  'audio/aac',
-  'audio/wav',
-  'audio/x-wav',
-  'audio/webm',
-  'audio/ogg',
-]);
+export const ALLOWED_MIME_TYPES: Record<UploadCategory, string[]> = {
+  reports: DOCUMENT_TYPES,
+  prescriptions: [...DOCUMENT_TYPES, 'text/plain'],
+  products: IMAGE_TYPES,
+  avatars: IMAGE_TYPES,
+  chat: DOCUMENT_TYPES,
+  'vendor-docs': DOCUMENT_TYPES,
+};
 
-const PRODUCT_IMAGE_MIMES = new Set([
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'image/webp',
-]);
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
+  'application/pdf': '.pdf',
+  'text/plain': '.txt',
+};
 
 @Injectable()
 export class UploadsService {
-  constructor(private config: ConfigService) {}
+  private readonly rootDir: string;
+  readonly maxFileSizeBytes: number;
 
-  saveFile(
-    file: Express.Multer.File,
-    subdir:
-      | 'reports'
-      | 'prescriptions'
-      | 'product-images'
-      | 'avatars'
-      | 'chat-attachments'
-      | 'vendor-documents',
-  ) {
-    if (!file) {
-      throw new BadRequestException('File is required');
-    }
-    if (!file.buffer?.length) {
-      throw new BadRequestException('Uploaded file is empty');
-    }
+  constructor(config: ConfigService) {
+    this.rootDir = resolve(process.cwd(), config.get<string>('UPLOAD_DIR', './uploads'));
+    this.maxFileSizeBytes = Number(config.get('MAX_FILE_SIZE_MB', 10)) * 1024 * 1024;
+  }
 
-    const maxFileSizeMb = Number(this.config.get<string>('MAX_FILE_SIZE_MB') ?? 10);
-    const maxBytes = maxFileSizeMb * 1024 * 1024;
-    if (file.size > maxBytes) {
-      throw new PayloadTooLargeException(
-        `File is too large. Maximum size is ${maxFileSizeMb} MB`,
-      );
+  /** Stores an uploaded file under uploads/<category>/ and returns its public URL. */
+  save(category: UploadCategory, file: Express.Multer.File | undefined) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('A non-empty "file" field is required');
+    }
+    const mimeType = file.mimetype === 'image/jpg' ? 'image/jpeg' : file.mimetype;
+    if (!ALLOWED_MIME_TYPES[category].includes(mimeType)) {
+      throw new BadRequestException(`File type ${mimeType} is not allowed here`);
     }
 
-    const mimeType = (file.mimetype || '').toLowerCase();
-    const allowed =
-      subdir === 'product-images' || subdir === 'avatars'
-        ? PRODUCT_IMAGE_MIMES
-        : subdir === 'chat-attachments'
-          ? new Set([...IMAGE_MIMES, ...DOCUMENT_MIMES, ...AUDIO_MIMES])
-          : subdir === 'vendor-documents'
-            ? new Set([...IMAGE_MIMES, ...DOCUMENT_MIMES])
-            : new Set([...IMAGE_MIMES, ...DOCUMENT_MIMES]);
-
-    if (!allowed.has(mimeType)) {
-      throw new BadRequestException(
-        `Unsupported file type "${mimeType}". Allowed: images (JPEG, PNG, WEBP) or PDF`,
-      );
-    }
-
-    const uploadDir = this.config.get<string>('UPLOAD_DIR', './uploads');
-    const targetDir = join(uploadDir, subdir);
-    if (!existsSync(targetDir)) {
-      mkdirSync(targetDir, { recursive: true });
-    }
-
-    const ext = extname(file.originalname) || this.extFromMime(mimeType);
-    const fileName = `${randomUUID()}${ext}`;
-    const filePath = join(targetDir, fileName);
-    writeFileSync(filePath, file.buffer);
+    const dir = join(this.rootDir, category);
+    mkdirSync(dir, { recursive: true });
+    const ext = EXTENSION_BY_MIME[mimeType] ?? (extname(file.originalname).toLowerCase() || '');
+    const storedName = `${Date.now()}-${randomUUID()}${ext}`;
+    writeFileSync(join(dir, storedName), file.buffer);
 
     return {
-      fileUrl: `/uploads/${subdir}/${fileName}`,
-      fileName: file.originalname || fileName,
+      fileUrl: `/uploads/${category}/${storedName}`,
+      fileName: file.originalname || storedName,
       mimeType,
       size: file.size,
     };
   }
 
-  resolveUploadedPath(fileUrl: string) {
-    if (!fileUrl.startsWith('/uploads/')) {
-      throw new BadRequestException('Invalid uploaded file URL');
+  /** Maps a /uploads/... URL (relative or absolute) to its file on disk, refusing paths outside the upload dir. */
+  resolveUploadedPath(fileUrl: string): string {
+    const pathname = fileUrl.startsWith('http') ? new URL(fileUrl).pathname : fileUrl;
+    const marker = '/uploads/';
+    const index = pathname.indexOf(marker);
+    if (index === -1) throw new BadRequestException('fileUrl must point to an uploaded file');
+
+    const relative = decodeURIComponent(pathname.slice(index + marker.length));
+    const absolute = resolve(this.rootDir, normalize(relative));
+    if (!absolute.startsWith(this.rootDir + sep)) {
+      throw new BadRequestException('Invalid file path');
     }
-    const uploadDir = this.config.get<string>('UPLOAD_DIR', './uploads');
-    const relative = fileUrl.replace(/^\/uploads\//, '');
-    const filePath = join(uploadDir, relative);
-    if (!existsSync(filePath)) {
-      throw new BadRequestException('Uploaded file was not found on the server');
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+      throw new NotFoundException('Uploaded file not found');
     }
-    return filePath;
+    return absolute;
   }
 
-  readUploadedTextHint(fileUrl: string, fileName?: string) {
-    const filePath = this.resolveUploadedPath(fileUrl);
-    const ext = extname(filePath).toLowerCase();
-    const parts = [fileName, fileUrl, filePath].filter(Boolean) as string[];
-
-    if (ext === '.pdf') {
-      try {
-        const buffer = readFileSync(filePath);
-        const ascii = buffer.toString('latin1');
-        const printable = ascii.replace(/[^\x20-\x7E\n\r]+/g, ' ');
-        parts.push(printable.slice(0, 4000));
-      } catch {
-        // Fall back to filename-only hints.
+  /**
+   * Text used by prescription extraction: the file name, plus the file's contents for plain-text uploads.
+   * Images and PDFs contribute only their name (no OCR).
+   */
+  readUploadedTextHint(fileUrl: string, fileName?: string): string {
+    const parts = [fileName ?? '', fileUrl.split('/').pop() ?? ''];
+    try {
+      const path = this.resolveUploadedPath(fileUrl);
+      if (extname(path).toLowerCase() === '.txt') {
+        parts.push(readFileSync(path, 'utf8').slice(0, 20_000));
       }
+    } catch {
+      // Missing or unreadable file — fall back to the name-based hint.
     }
-
-    return parts.join(' ');
-  }
-
-  private extFromMime(mime: string): string {
-    if (mime.includes('png')) return '.png';
-    if (mime.includes('pdf')) return '.pdf';
-    if (mime.includes('webp')) return '.webp';
-    if (mime.includes('heic') || mime.includes('heif')) return '.heic';
-    if (mime.includes('mpeg') || mime.includes('mp3')) return '.mp3';
-    if (mime.includes('m4a') || mime.includes('mp4')) return '.m4a';
-    if (mime.includes('wav')) return '.wav';
-    if (mime.includes('ogg')) return '.ogg';
-    if (mime.includes('webm')) return '.webm';
-    return '.jpg';
+    return parts.filter(Boolean).join('\n');
   }
 }

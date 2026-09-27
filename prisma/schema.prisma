@@ -107,45 +107,47 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  patientProfile  PatientProfile?
-  vendorProfile   VendorProfile?
-  doctorProfile   DoctorProfile?
-  addresses       Address[]
-  cart            Cart?
-  orders          Order[]          @relation("CustomerOrders")
-  healthReports   HealthReport[]
-  prescriptions   Prescription[]
-  medications     MedicationSchedule[]
-  notifications   Notification[]
-  healthVitals    HealthVital[]
-  medicinesCreated Medicine[]      @relation("MedicineCreator")
-  vendorProducts  VendorProduct[]  @relation("VendorProductOwner")
-  otpCodes        OtpCode[]
-  patientAppointments Appointment[] @relation("PatientAppointments")
-  consultationMessages ConsultationMessage[]
-  familyMemberRecord  FamilyMember?
-  managedFamilyProfiles PatientProfile[] @relation("ManagedFamilyAccounts")
+  patientProfile        PatientProfile?
+  vendorProfile         VendorProfile?
+  doctorProfile         DoctorProfile?
+  addresses             Address[]
+  cart                  Cart?
+  orders                Order[]               @relation("CustomerOrders")
+  healthReports         HealthReport[]
+  prescriptions         Prescription[]
+  medications           MedicationSchedule[]
+  notifications         Notification[]
+  deviceTokens          DeviceToken[]
+  healthVitals          HealthVital[]
+  medicinesCreated      Medicine[]            @relation("MedicineCreator")
+  vendorProducts        VendorProduct[]       @relation("VendorProductOwner")
+  otpCodes              OtpCode[]
+  patientAppointments   Appointment[]         @relation("PatientAppointments")
+  consultationMessages  ConsultationMessage[]
+  familyMemberRecord    FamilyMember?
+  managedFamilyProfiles PatientProfile[]      @relation("ManagedFamilyAccounts")
+  cholbePrescriptions   CholbePrescription[]  @relation("PatientCholbePrescriptions")
 
   @@index([role])
   @@index([status])
 }
 
 model PatientProfile {
-  id           String   @id @default(uuid())
-  userId       String   @unique
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  age          Int?
-  gender       String?
-  bloodGroup   String?
-  usagePurpose String?
-  conditions   String[] @default([])
-  mealBreakfast String?
-  mealLunch    String?
-  mealDinner   String?
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  age             Int?
+  gender          String?
+  bloodGroup      String?
+  usagePurpose    String?
+  conditions      String[] @default([])
+  mealBreakfast   String?
+  mealLunch       String?
+  mealDinner      String?
   managedByUserId String?
   managedBy       User?    @relation("ManagedFamilyAccounts", fields: [managedByUserId], references: [id], onDelete: SetNull)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   familyMembers     FamilyMember[]
   emergencyContacts EmergencyContact[]
@@ -189,8 +191,8 @@ model VendorProfile {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
-  products VendorProduct[]
-  orders   Order[]         @relation("VendorOrders")
+  products      VendorProduct[]
+  orders        Order[]              @relation("VendorOrders")
   documents     VendorDocument[]
   payoutMethods VendorPayoutMethod[]
 }
@@ -256,28 +258,32 @@ model DoctorProfile {
   registrationNumber String?
   chamberAddress     String?
   languages          String[]            @default([])
+  /// Private file path of the doctor's signature image, stamped on every issued prescription.
+  signaturePath      String?
+  signatureUpdatedAt DateTime?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
-  appointments       Appointment[]
-  weeklyAvailability DoctorWeeklyAvailability[]
-  dateOverrides      DoctorDateOverride[]
-  qualifications     DoctorQualification[]
-  experiences        DoctorExperience[]
-  instructions       DoctorInstruction[]
-  payoutMethods    DoctorPayoutMethod[]
-  withdrawals      DoctorWithdrawal[]
+  appointments        Appointment[]
+  cholbePrescriptions CholbePrescription[]
+  weeklyAvailability  DoctorWeeklyAvailability[]
+  dateOverrides       DoctorDateOverride[]
+  qualifications      DoctorQualification[]
+  experiences         DoctorExperience[]
+  instructions        DoctorInstruction[]
+  payoutMethods       DoctorPayoutMethod[]
+  withdrawals         DoctorWithdrawal[]
 }
 
 model DoctorPayoutMethod {
-  id            String           @id @default(uuid())
+  id            String             @id @default(uuid())
   doctorId      String
-  doctor        DoctorProfile    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctor        DoctorProfile      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
   label         String
   methodType    VendorPayoutType
   accountMasked String
-  isPrimary     Boolean          @default(false)
-  createdAt     DateTime         @default(now())
+  isPrimary     Boolean            @default(false)
+  createdAt     DateTime           @default(now())
   withdrawals   DoctorWithdrawal[]
 
   @@index([doctorId])
@@ -402,10 +408,26 @@ model Medicine {
   category             String?
   brand                String?
   medicineType         String?
+  /// Dosage form, e.g. Tablet, Capsule, Syrup, Injection, Cream, Drops, Inhaler.
+  form                 String?
+  /// Strength as printed on the pack, e.g. "500 mg" or "120 mg/5 mL".
+  strength             String?
+  /// Reference retail price (BDT) for one pack; vendors set their own selling price.
+  mrp                  Decimal?       @db.Decimal(10, 2)
+  /// What one pack at `mrp` contains, e.g. "10 tablets (1 strip)".
+  packSize             String?
   description          String?
+  /// Structured leaflet for the medicine-info screen: [{ title, blocks: [{ text, bullet?, bold? }] }].
   infoSections         Json?
   imageUrl             String?
   prescriptionRequired Boolean        @default(false)
+
+  // Prefilled into a prescription line when a doctor picks this medicine.
+  defaultDose          String?
+  defaultFrequency     String?
+  defaultDuration      String?
+  defaultInstruction   String?
+
   source               MedicineSource
   status               MedicineStatus @default(ACTIVE)
   createdByUserId      String
@@ -413,43 +435,45 @@ model Medicine {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
-  vendorProducts VendorProduct[]
-  cartItems      CartItem[]
-  orderItems     OrderItem[]
+  vendorProducts          VendorProduct[]
+  cartItems               CartItem[]
+  orderItems              OrderItem[]
+  cholbePrescriptionItems CholbePrescriptionItem[]
 
   @@index([source])
   @@index([status])
   @@index([name])
+  @@index([form])
 }
 
 // ─── Vendor sellable inventory (vendor upload path) ──────────────────────────
 
 model VendorProduct {
-  id              String         @id @default(uuid())
-  vendorId        String
-  vendor          VendorProfile  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  ownerUserId     String
-  owner           User           @relation("VendorProductOwner", fields: [ownerUserId], references: [id])
-  medicineId      String?
-  medicine        Medicine?      @relation(fields: [medicineId], references: [id], onDelete: SetNull)
-  name            String
-  genericName     String?
-  category        String?
-  brand           String?
-  unitPrice       Decimal        @db.Decimal(10, 2)
-  discountPrice   Decimal?       @db.Decimal(10, 2)
-  stockQuantity   Int            @default(0)
-  minAlertLevel   Int            @default(10)
-  expiryDate      DateTime?
-  batchNumber     String?
-  unitType        String?
-  temperature     String?
-  imageUrl        String?
-  prescriptionRequired Boolean     @default(false)
-  reminderActive  Boolean        @default(true)
-  isActive        Boolean        @default(true)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  id                   String        @id @default(uuid())
+  vendorId             String
+  vendor               VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  ownerUserId          String
+  owner                User          @relation("VendorProductOwner", fields: [ownerUserId], references: [id])
+  medicineId           String?
+  medicine             Medicine?     @relation(fields: [medicineId], references: [id], onDelete: SetNull)
+  name                 String
+  genericName          String?
+  category             String?
+  brand                String?
+  unitPrice            Decimal       @db.Decimal(10, 2)
+  discountPrice        Decimal?      @db.Decimal(10, 2)
+  stockQuantity        Int           @default(0)
+  minAlertLevel        Int           @default(10)
+  expiryDate           DateTime?
+  batchNumber          String?
+  unitType             String?
+  temperature          String?
+  imageUrl             String?
+  prescriptionRequired Boolean       @default(false)
+  reminderActive       Boolean       @default(true)
+  isActive             Boolean       @default(true)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   cartItems  CartItem[]
   orderItems OrderItem[]
@@ -471,13 +495,9 @@ model HealthReport {
   fileUrl    String
   fileName   String?
   mimeType   String?
-  tip                     String?
-  patientName             String?
-  referredDoctorName      String?
-  referredDoctorSpecialty String?
-  comments                String?
-  createdAt               DateTime   @default(now())
-  updatedAt               DateTime   @updatedAt
+  tip        String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 
   @@index([patientId])
 }
@@ -498,49 +518,51 @@ model Prescription {
 }
 
 model PrescriptionMedicine {
-  id             String       @id @default(uuid())
-  prescriptionId String
-  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
-  name           String
-  dose           String?
-  instruction    String?
-  mealTiming     String?
-  frequency      String?
-  times          String[]     @default([])
-  startDate      DateTime?
-  endDate        DateTime?
+  id                    String       @id @default(uuid())
+  prescriptionId        String
+  prescription          Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  name                  String
+  dose                  String?
+  instruction           String?
+  mealTiming            String?
+  frequency             String?
+  times                 String[]     @default([])
+  startDate             DateTime?
+  endDate               DateTime?
   reminderBeforeMinutes Int?
   followUpMinutes       Int?
   inventoryCount        Int?
 }
 
 model MedicationSchedule {
-  id                    String   @id @default(uuid())
-  patientId             String
-  patient               User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  medicineName          String
-  dose                  String?
-  instruction           String?
-  mealTiming            String?
-  times                 String[] @default([])
-  frequency             String?
-  startDate             DateTime?
-  endDate               DateTime?
-  reminderEnabled       Boolean  @default(true)
-  reminderBeforeMinutes Int?
-  followUpEnabled       Boolean  @default(false)
-  followUpMinutes       Int?
-  followUpTime          String?
-  refillEnabled         Boolean  @default(false)
-  inventoryCount        Int?
-  refillDate            DateTime?
-  refillTime            String?
-  caregiverName         String?
-  prescriptionId        String?
-  prescription          Prescription? @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                       String                  @id @default(uuid())
+  patientId                String
+  patient                  User                    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medicineName             String
+  dose                     String?
+  instruction              String?
+  mealTiming               String?
+  times                    String[]                @default([])
+  frequency                String?
+  startDate                DateTime?
+  endDate                  DateTime?
+  reminderEnabled          Boolean                 @default(true)
+  reminderBeforeMinutes    Int?
+  followUpEnabled          Boolean                 @default(false)
+  followUpMinutes          Int?
+  followUpTime             String?
+  refillEnabled            Boolean                 @default(false)
+  inventoryCount           Int?
+  refillDate               DateTime?
+  refillTime               String?
+  caregiverName            String?
+  prescriptionId           String?
+  prescription             Prescription?           @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
+  cholbePrescriptionItemId String?
+  cholbePrescriptionItem   CholbePrescriptionItem? @relation(fields: [cholbePrescriptionItemId], references: [id], onDelete: SetNull)
+  isActive                 Boolean                 @default(true)
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
 
   logs MedicationLog[]
 }
@@ -571,15 +593,15 @@ model HealthVital {
 // ─── E-pharmacy: cart, addresses, orders ─────────────────────────────────────
 
 model Address {
-  id               String  @id @default(uuid())
+  id               String   @id @default(uuid())
   userId           String
-  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  label            String  @default("Home")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label            String   @default("Home")
   region           String?
   formattedAddress String
   latitude         Float?
   longitude        Float?
-  isDefault        Boolean @default(false)
+  isDefault        Boolean  @default(false)
   createdAt        DateTime @default(now())
 }
 
@@ -609,24 +631,24 @@ model CartItem {
 }
 
 model Order {
-  id              String        @id @default(uuid())
-  orderNumber     String        @unique
+  id              String         @id @default(uuid())
+  orderNumber     String         @unique
   customerId      String
-  customer        User          @relation("CustomerOrders", fields: [customerId], references: [id])
+  customer        User           @relation("CustomerOrders", fields: [customerId], references: [id])
   vendorId        String?
   vendor          VendorProfile? @relation("VendorOrders", fields: [vendorId], references: [id])
   addressId       String?
   addressSnapshot Json?
-  status          OrderStatus   @default(PENDING)
-  paymentMethod   PaymentMethod @default(COD)
-  paymentStatus   PaymentStatus @default(PENDING)
-  subtotal        Decimal       @db.Decimal(10, 2)
-  deliveryCharge  Decimal       @default(0) @db.Decimal(10, 2)
-  total           Decimal       @db.Decimal(10, 2)
+  status          OrderStatus    @default(PENDING)
+  paymentMethod   PaymentMethod  @default(COD)
+  paymentStatus   PaymentStatus  @default(PENDING)
+  subtotal        Decimal        @db.Decimal(10, 2)
+  deliveryCharge  Decimal        @default(0) @db.Decimal(10, 2)
+  total           Decimal        @db.Decimal(10, 2)
   prescriptionUrl String?
   notes           String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   items        OrderItem[]
   statusEvents OrderStatusEvent[]
@@ -662,15 +684,15 @@ model OrderStatusEvent {
 }
 
 model PaymentTransaction {
-  id        String        @id @default(uuid())
-  orderId   String        @unique
-  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  method    PaymentMethod
-  amount    Decimal       @db.Decimal(10, 2)
-  status    PaymentStatus @default(PENDING)
+  id         String        @id @default(uuid())
+  orderId    String        @unique
+  order      Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method     PaymentMethod
+  amount     Decimal       @db.Decimal(10, 2)
+  status     PaymentStatus @default(PENDING)
   gatewayRef String?
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
 }
 
 // ─── Doctors & appointments ──────────────────────────────────────────────────
@@ -692,8 +714,9 @@ model Appointment {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  messages ConsultationMessage[]
-  feedback ConsultationFeedback?
+  messages            ConsultationMessage[]
+  feedback            ConsultationFeedback?
+  cholbePrescriptions CholbePrescription[]
 
   @@index([patientId])
   @@index([doctorId])
@@ -715,15 +738,104 @@ model ConsultationMessage {
 }
 
 model ConsultationFeedback {
-  id            String        @id @default(uuid())
-  appointmentId String        @unique
-  appointment   Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  id            String      @id @default(uuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
   doctorId      String?
   rating        Int
   comment       String?
-  createdAt     DateTime      @default(now())
+  createdAt     DateTime    @default(now())
 
   @@index([doctorId])
+}
+
+// ─── Doctor-issued prescriptions ─────────────────────────────────────────────
+// Separate from `Prescription`, which holds files patients upload themselves.
+// Issued prescriptions are immutable: a mistake is fixed by cancelling and reissuing.
+
+enum CholbePrescriptionStatus {
+  ISSUED
+  CANCELLED
+}
+
+model CholbePrescription {
+  id            String                   @id @default(uuid())
+  /// Monotonic counter backing `rxNumber`; never reused.
+  serial        Int                      @unique @default(autoincrement())
+  /// Human-facing unique id printed on the prescription, e.g. RX-260924-000123.
+  rxNumber      String                   @unique
+  appointmentId String
+  appointment   Appointment              @relation(fields: [appointmentId], references: [id])
+  doctorId      String
+  doctor        DoctorProfile            @relation(fields: [doctorId], references: [id])
+  /// Always the appointment's patient — never taken from the client.
+  patientId     String
+  patient       User                     @relation("PatientCholbePrescriptions", fields: [patientId], references: [id])
+  status        CholbePrescriptionStatus @default(ISSUED)
+  cancelledAt   DateTime?
+  cancelReason  String?
+
+  // Patient details as written on the prescription (snapshot at issue time).
+  patientName       String
+  patientAge        String?
+  patientSex        String?
+  patientWeight     String?
+  patientBloodGroup String?
+  allergies         String?
+
+  // Doctor letterhead (snapshot of the doctor's profile at issue time).
+  doctorName         String
+  doctorDegree       String?
+  doctorSpecialty    String?
+  registrationNumber String?
+  chamberAddress     String?
+  doctorPhone        String?
+
+  chiefComplaints String[]  @default([])
+  temperature     String?
+  bloodPressure   String?
+  pulse           String?
+  spo2            String?
+  diagnosis       String?
+  investigations  String[]  @default([])
+  advice          String[]  @default([])
+  followUpDate    DateTime? @db.Date
+
+  /// Private copy of the doctor's signature taken at issue time, so later signature changes never alter it.
+
+  signaturePath String?
+
+  /// Private file path of the issued PDF; set once, never replaced.
+  pdfPath   String?
+  pdfSize   Int?
+  issuedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items CholbePrescriptionItem[]
+
+  @@index([doctorId, issuedAt])
+  @@index([patientId, issuedAt])
+  @@index([appointmentId])
+}
+
+model CholbePrescriptionItem {
+  id             String             @id @default(uuid())
+  prescriptionId String
+  prescription   CholbePrescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  position       Int
+  medicineId     String?
+  medicine       Medicine?          @relation(fields: [medicineId], references: [id], onDelete: SetNull)
+  name           String
+  genericName    String?
+  dose           String?
+  frequency      String?
+  duration       String?
+  instruction    String?
+
+  medicationSchedules MedicationSchedule[]
+
+  @@index([prescriptionId])
 }
 
 // ─── Notifications ───────────────────────────────────────────────────────────
@@ -739,4 +851,16 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@index([userId, isRead])
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  platform  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }

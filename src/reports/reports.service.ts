@@ -19,10 +19,6 @@ export class ReportsService {
         fileName: dto.fileName,
         mimeType: dto.mimeType,
         tip: dto.tip,
-        patientName: dto.patientName,
-        referredDoctorName: dto.referredDoctorName,
-        referredDoctorSpecialty: dto.referredDoctorSpecialty,
-        comments: dto.comments,
       },
     });
   }
@@ -52,10 +48,6 @@ export class ReportsService {
         provider: dto.provider,
         reportDate: dto.reportDate ? new Date(dto.reportDate) : undefined,
         tip: dto.tip,
-        patientName: dto.patientName,
-        referredDoctorName: dto.referredDoctorName,
-        referredDoctorSpecialty: dto.referredDoctorSpecialty,
-        comments: dto.comments,
       },
     });
   }

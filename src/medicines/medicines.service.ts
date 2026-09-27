@@ -1,26 +1,21 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { MedicineSource, Prisma, UserRole } from '@prisma/client';
+import { MedicineSource, MedicineStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
-import { CreateMedicineDto, MedicineQueryDto, UpdateMedicineDto } from './dto/medicine.dto';
+import {
+  CreateMedicineDto,
+  MedicineQueryDto,
+  PrescribableMedicineQueryDto,
+  UpdateMedicineDto,
+} from './dto/medicine.dto';
 
 @Injectable()
 export class MedicinesService {
   constructor(private prisma: PrismaService) {}
 
-  private toMedicineData(dto: CreateMedicineDto | UpdateMedicineDto) {
-    const { infoSections, ...rest } = dto;
-    return {
-      ...rest,
-      ...(infoSections !== undefined
-        ? { infoSections: infoSections as unknown as Prisma.InputJsonValue }
-        : {}),
-    };
-  }
-
   async createByDoctor(userId: string, dto: CreateMedicineDto) {
     return this.prisma.medicine.create({
       data: {
-        ...this.toMedicineData(dto),
+        ...dto,
         source: MedicineSource.DOCTOR,
         createdByUserId: userId,
       },
@@ -30,7 +25,7 @@ export class MedicinesService {
   async createByAdmin(userId: string, dto: CreateMedicineDto) {
     return this.prisma.medicine.create({
       data: {
-        ...this.toMedicineData(dto),
+        ...dto,
         source: MedicineSource.ADMIN,
         createdByUserId: userId,
       },
@@ -42,6 +37,8 @@ export class MedicinesService {
       where: {
         ...(query.source ? { source: query.source } : {}),
         ...(query.status ? { status: query.status } : {}),
+        ...(query.category ? { category: { equals: query.category, mode: 'insensitive' } } : {}),
+        ...(query.form ? { form: { equals: query.form, mode: 'insensitive' } } : {}),
         ...(query.search
           ? {
               OR: [
@@ -56,6 +53,43 @@ export class MedicinesService {
         _count: { select: { vendorProducts: true } },
       },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Catalogue for the doctor's prescription picker: active medicines that have
+   * a dosage form, with their prescribing defaults. Prices are left out on purpose.
+   */
+  async findPrescribable(query: PrescribableMedicineQueryDto) {
+    const search = query.search?.trim();
+    const where: Prisma.MedicineWhereInput = {
+      status: MedicineStatus.ACTIVE,
+      form: { not: null },
+      ...(search
+        ? {
+            OR: [
+              { name: { contains: search, mode: 'insensitive' } },
+              { genericName: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    return this.prisma.medicine.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        genericName: true,
+        form: true,
+        strength: true,
+        defaultDose: true,
+        defaultFrequency: true,
+        defaultDuration: true,
+        defaultInstruction: true,
+      },
+      orderBy: { name: 'asc' },
+      take: query.limit ?? 50,
     });
   }
 
@@ -79,7 +113,7 @@ export class MedicinesService {
     if (role === UserRole.DOCTOR && medicine.createdByUserId !== userId) {
       throw new ForbiddenException('You can only edit medicines you created');
     }
-    return this.prisma.medicine.update({ where: { id }, data: this.toMedicineData(dto) });
+    return this.prisma.medicine.update({ where: { id }, data: dto });
   }
 
   async delete(id: string) {

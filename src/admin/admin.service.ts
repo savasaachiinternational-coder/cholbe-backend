@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import {
   OrderStatus,
   PaymentStatus,
@@ -7,11 +7,11 @@ import {
   VendorApprovalStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
+import { OrdersService } from '../orders/orders.service';
 import { VendorProductsService } from '../vendor-products/vendor-products.service';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { formatAppointmentDateBd } from '../common/utils/bd-time.util';
-import { assertOrderStatusTransition } from '../common/utils/order-status.util';
 
 @Injectable()
 export class AdminService {
@@ -20,6 +20,7 @@ export class AdminService {
     private vendorProducts: VendorProductsService,
     private usersService: UsersService,
     private notifications: NotificationsService,
+    private orders: OrdersService,
   ) {}
 
   async dashboard() {
@@ -214,34 +215,13 @@ export class AdminService {
     });
   }
 
-  async updateOrderStatus(id: string, status: OrderStatus) {
-    const existing = await this.prisma.order.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Order not found');
+  /** Same rules, stock and payment handling as a vendor change; see OrdersService.changeStatus. */
+  updateOrderStatus(id: string, status: OrderStatus, adminUserId: string, note?: string) {
+    return this.orders.changeStatus(id, status, { role: UserRole.ADMIN, userId: adminUserId }, note);
+  }
 
-    assertOrderStatusTransition(existing.status, status, { allowForwardSkip: true });
-
-    await this.prisma.order.update({
-      where: { id },
-      data: {
-        status,
-        statusEvents: { create: { status, note: `Status updated to ${status}` } },
-      },
-    });
-
-    const ord = await this.prisma.order.findUnique({
-      where: { id },
-      select: { customerId: true, orderNumber: true },
-    });
-    if (ord) {
-      void this.notifications.create(
-        ord.customerId,
-        'order',
-        'Order Status Updated',
-        `Your order #${ord.orderNumber} is now ${status.toLowerCase().replace(/_/g, ' ')}.`,
-      );
-    }
-
-    return this.getOrder(id);
+  markOrderPaid(id: string) {
+    return this.orders.markPaid(id);
   }
 
   async ordersMonthly() {

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@ne
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { OrderStatus, UserRole, VendorApprovalStatus } from '@prisma/client';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto } from './dto/order.dto';
+import { CreateOrderDto, UpdateOrderStatusDto } from './dto/order.dto';
 import { CurrentUser, JwtPayload, Roles } from '../common/decorators';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -35,11 +35,16 @@ export class OrdersController {
   @Roles(UserRole.VENDOR)
   @ApiOperation({ summary: 'Vendor updates order status' })
   vendorUpdateStatus(
+    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body('status') status: OrderStatus,
-    @Body('note') note?: string,
+    @Body() dto: UpdateOrderStatusDto,
   ) {
-    return this.ordersService.updateStatus(id, status, note);
+    return this.ordersService.changeStatus(
+      id,
+      dto.status,
+      { role: UserRole.VENDOR, userId: user.sub },
+      dto.note,
+    );
   }
 
   @Get('vendor/:id')
@@ -63,10 +68,7 @@ export class OrdersController {
     return this.ordersService.findOne(user.sub, id);
   }
 
-  @Post(':id/payment/confirm')
-  @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Confirm payment (mock gateway)' })
-  confirmPayment(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.ordersService.confirmPayment(id, user.sub);
-  }
+  // No customer "confirm payment" endpoint: a customer must not be able to mark
+  // their own order paid. Online payments are confirmed by an admin
+  // (PATCH /admin/orders/:id/payment) until a payment gateway is connected.
 }

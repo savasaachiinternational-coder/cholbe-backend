@@ -77,13 +77,22 @@ export class ForgotPasswordDto {
 }
 
 export class ResetPasswordDto {
-  @ApiProperty({ example: 'rayhan@gmail.com' })
+  @ApiPropertyOptional({
+    description: 'Token from POST /auth/password/verify-otp. Preferred over contact + code.',
+  })
+  @IsOptional()
   @IsString()
-  contact!: string;
+  resetToken?: string;
 
-  @ApiProperty({ example: '12345' })
+  @ApiPropertyOptional({ example: 'rayhan@gmail.com', description: 'Legacy: use with code' })
+  @IsOptional()
   @IsString()
-  code!: string;
+  contact?: string;
+
+  @ApiPropertyOptional({ example: '12345', description: 'Legacy: use with contact' })
+  @IsOptional()
+  @IsString()
+  code?: string;
 
   @ApiProperty({ minLength: 8 })
   @IsString()

@@ -10,6 +10,8 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   app.setGlobalPrefix('api/v1');
+  // AI Doc Scanner posts base64 photos as JSON; the 100kb default rejects them.
+  app.useBodyParser('json', { limit: '15mb' });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

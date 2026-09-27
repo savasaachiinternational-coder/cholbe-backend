@@ -5,10 +5,26 @@ import { DoctorAvailabilityService } from '../doctors/doctor-availability.servic
 import {
   ACTIVE_APPOINTMENT_STATUSES,
   isAppointmentUpcoming,
-  pickNextUpcomingAppointment,
+  pickUpcomingAppointments,
   startOfDayBd,
   endOfDayBd,
+  appointmentStartsAtBd,
+  dayOfWeekBd,
+  toDateOnlyIsoBd,
 } from '../common/utils/bd-time.util';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** % change of current vs previous; null when there is nothing to compare against. */
+function percentChange(current: number, previous: number): number | null {
+  if (previous === 0) return current === 0 ? 0 : null;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+/** Short human reference for a uuid, e.g. "0D1234". */
+function shortRef(id: string): string {
+  return id.replace(/-/g, '').slice(0, 6).toUpperCase();
+}
 
 function calcDuration(startDate: Date, endDate?: Date | null, isPresent?: boolean): string {
   const end = isPresent || !endDate ? new Date() : endDate;
@@ -146,7 +162,7 @@ export class DoctorPortalService {
     const upcomingAppointments = upcomingCandidates.filter((appt) =>
       isAppointmentUpcoming(appt.scheduledDate, appt.timeSlot, appt.status, appt.durationMin),
     );
-    const nextAppointment = pickNextUpcomingAppointment(
+    const nextAppointments = pickUpcomingAppointments(
       await this.prisma.appointment.findMany({
         where: {
           ...baseWhere,
@@ -155,6 +171,7 @@ export class DoctorPortalService {
         },
         include: this.appointmentInclude,
       }),
+      4,
     );
 
     return {
@@ -166,7 +183,8 @@ export class DoctorPortalService {
         totalAppointments,
         activeConsultations: consultationCount,
       },
-      nextAppointment,
+      nextAppointment: nextAppointments[0] ?? null,
+      nextAppointments,
       recentAppointments,
     };
   }
@@ -207,7 +225,9 @@ export class DoctorPortalService {
       {
         patient: (typeof appointments)[0]['patient'];
         appointmentCount: number;
+        lastAppointmentId: string;
         lastAppointmentDate: Date;
+        lastTimeSlot: string;
         lastStatus: string;
       }
     >();
@@ -218,7 +238,9 @@ export class DoctorPortalService {
         map.set(appt.patientId, {
           patient: appt.patient,
           appointmentCount: 1,
+          lastAppointmentId: appt.id,
           lastAppointmentDate: appt.scheduledDate,
+          lastTimeSlot: appt.timeSlot,
           lastStatus: appt.status,
         });
       } else {
@@ -598,7 +620,119 @@ export class DoctorPortalService {
       where: { doctorId },
       orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
     });
-    return { wallet, payoutMethods };
+    const [breakdown, transactions] = await Promise.all([
+      this.getEarningBreakdown(doctorId),
+      this.getTransactions(doctorId),
+    ]);
+    return { wallet, payoutMethods, breakdown, transactions };
+  }
+
+  /**
+   * Completed-consultation earnings for today / this week (from Sunday) / this month (BD time),
+   * each compared with the same elapsed span of the previous period.
+   */
+  private async getEarningBreakdown(doctorId: string) {
+    const now = new Date();
+    const todayStart = startOfDayBd(now);
+    const weekStart = new Date(todayStart.getTime() - dayOfWeekBd(now) * DAY_MS);
+    const monthIso = toDateOnlyIsoBd(now).slice(0, 7);
+    const monthStart = new Date(`${monthIso}-01T00:00:00+06:00`);
+    const [y, m] = monthIso.split('-').map(Number);
+    const prevMonthIso = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    const prevMonthStart = new Date(`${prevMonthIso}-01T00:00:00+06:00`);
+
+    const completed = await this.prisma.appointment.findMany({
+      where: {
+        doctorId,
+        status: { in: ['completed', 'COMPLETED'] },
+        scheduledDate: { gte: new Date(prevMonthStart.getTime() - DAY_MS) },
+      },
+      select: { scheduledDate: true, timeSlot: true, fee: true },
+    });
+    const items = completed.map((a) => ({
+      at: appointmentStartsAtBd(a.scheduledDate, a.timeSlot).getTime(),
+      fee: Number(a.fee),
+    }));
+    const sum = (from: number, to: number) =>
+      items.filter((i) => i.at >= from && i.at < to).reduce((total, i) => total + i.fee, 0);
+
+    const period = (start: Date, prevStart: Date) => {
+      const elapsed = now.getTime() - start.getTime();
+      const amount = sum(start.getTime(), now.getTime() + 1);
+      const previous = sum(prevStart.getTime(), Math.min(prevStart.getTime() + elapsed, start.getTime()) + 1);
+      return { amount, previous, changePct: percentChange(amount, previous) };
+    };
+
+    return {
+      today: period(todayStart, new Date(todayStart.getTime() - DAY_MS)),
+      week: period(weekStart, new Date(weekStart.getTime() - 7 * DAY_MS)),
+      month: period(monthStart, prevMonthStart),
+    };
+  }
+
+  /**
+   * Consultation earnings (credits) and withdrawals (debits), newest first.
+   * Earnings are PAID once completed; appointments whose time has passed but aren't completed yet are PENDING.
+   * Future bookings are left out — they haven't happened.
+   */
+  private async getTransactions(doctorId: string, limit = 200) {
+    const now = new Date();
+    const [appointments, withdrawals] = await Promise.all([
+      this.prisma.appointment.findMany({
+        where: {
+          doctorId,
+          status: { in: ['completed', 'COMPLETED', ...ACTIVE_APPOINTMENT_STATUSES] },
+          scheduledDate: { lte: endOfDayBd(now) },
+        },
+        include: { patient: { select: { fullName: true, avatarUrl: true } } },
+        orderBy: { scheduledDate: 'desc' },
+        take: limit,
+      }),
+      this.prisma.doctorWithdrawal.findMany({
+        where: { doctorId },
+        include: { payoutMethod: true },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      }),
+    ]);
+
+    const earnings = appointments
+      .filter((a) => appointmentStartsAtBd(a.scheduledDate, a.timeSlot).getTime() <= now.getTime())
+      .map((a) => ({
+      id: a.id,
+      kind: 'earning' as const,
+      reference: shortRef(a.id),
+      title: a.patient.fullName,
+      avatarUrl: a.patient.avatarUrl,
+      method: a.paymentMethod ?? 'COD',
+      methodLabel: null as string | null,
+      consultationType: a.consultationType,
+      direction: 'credit' as const,
+      amount: Number(a.fee),
+      status: a.status.toLowerCase() === 'completed' ? 'PAID' : 'PENDING',
+      date: appointmentStartsAtBd(a.scheduledDate, a.timeSlot),
+      note: null as string | null,
+    }));
+
+    const payouts = withdrawals.map((w) => ({
+      id: w.id,
+      kind: 'withdrawal' as const,
+      reference: shortRef(w.id),
+      title: 'Withdrawal',
+      avatarUrl: null as string | null,
+      method: w.payoutMethod?.methodType ?? 'BANK',
+      methodLabel: w.payoutMethod ? `${w.payoutMethod.label} · ${w.payoutMethod.accountMasked}` : null,
+      consultationType: null,
+      direction: 'debit' as const,
+      amount: Number(w.amount),
+      status: w.status,
+      date: w.createdAt,
+      note: w.note,
+    }));
+
+    return [...earnings, ...payouts]
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, limit);
   }
 
   async listWithdrawals(userId: string) {
